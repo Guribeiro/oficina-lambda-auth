@@ -1,0 +1,37 @@
+{
+  "name": "oficina-lambda-auth",
+  "version": "1.0.0",
+  "description": "Lambdas de autenticação por CPF e authorizer JWT do API Gateway - Oficina Mecânica",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage"
+  },
+  "dependencies": {
+    "jose": "^6.2.17",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1169.0",
+    "@eslint/js": "^9.39.1",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.19.1",
+    "@types/pg": "^8.20.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.1",
+    "jsonwebtoken": "^9.0.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,202 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente
+        type: choice
+        options: [hml, prd]
+        default: hml
+      action:
+        description: Ação
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+  TERRAFORM_VERSION: 1.13.4
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+jobs:
+  # Lint, tipos, testes, build das funções e checagens do Terraform.
+  # Obrigatório para merge (branch protection). Jobs que acessam a AWS só rodam
+  # quando a variável TF_STATE_BUCKET está configurada.
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:cov
+      - run: npm run build
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate
+        run: |
+          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra validate
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.59.1
+
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --recursive --format compact
+
+  # PR para develop -> plano de hml; PR para main -> plano de prd.
+  plan:
+    name: plan (${{ github.base_ref == 'main' && 'prd' || 'hml' }})
+    if: github.event_name == 'pull_request' && vars.TF_STATE_BUCKET != ''
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.base_ref == 'main' && 'producao' || 'homologacao' }}
+    env:
+      TARGET_ENV: ${{ github.base_ref == 'main' && 'prd' || 'hml' }}
+      TF_VAR_newrelic_layer_arn: ${{ vars.NEW_RELIC_LAYER_ARN }}
+      TF_VAR_newrelic_account_id: ${{ vars.NEW_RELIC_ACCOUNT_ID }}
+      TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Plan
+        run: ./scripts/tf.sh "$TARGET_ENV" plan
+
+  # Deploy automático: develop -> hml, main -> prd.
+  deploy:
+    name: deploy (${{ github.ref == 'refs/heads/main' && 'prd' || 'hml' }})
+    if: github.event_name == 'push' && vars.TF_STATE_BUCKET != ''
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'producao' || 'homologacao' }}
+    concurrency:
+      group: lambda-auth-${{ github.ref == 'refs/heads/main' && 'prd' || 'hml' }}
+      cancel-in-progress: false
+    env:
+      AUTO_APPROVE: "true"
+      TARGET_ENV: ${{ github.ref == 'refs/heads/main' && 'prd' || 'hml' }}
+      TF_VAR_newrelic_layer_arn: ${{ vars.NEW_RELIC_LAYER_ARN }}
+      TF_VAR_newrelic_account_id: ${{ vars.NEW_RELIC_ACCOUNT_ID }}
+      TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Deploy das funções
+        run: ./scripts/tf.sh "$TARGET_ENV" apply
+
+      - name: Smoke test
+        run: |
+          auth_url="$(terraform -chdir=infra output -raw auth_url)"
+          # CPF com dígito verificador inválido: a função precisa responder 400.
+          status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$auth_url" \
+            -H 'content-type: application/json' -d '{"cpf":"12345678900"}')"
+          echo "POST $auth_url (CPF inválido) -> $status"
+          test "$status" = "400"
+          {
+            echo "### Lambdas ${TARGET_ENV}"
+            echo "- Autenticação: \`POST ${auth_url}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Execução manual: plan/apply ou destroy entre sessões do Learner Lab.
+  manual:
+    name: ${{ inputs.action }} (${{ inputs.environment }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'prd' && 'producao' || 'homologacao' }}
+    concurrency:
+      group: lambda-auth-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      AUTO_APPROVE: "true"
+      TARGET_ENV: ${{ inputs.environment }}
+      ACTION: ${{ inputs.action }}
+      TF_VAR_newrelic_layer_arn: ${{ vars.NEW_RELIC_LAYER_ARN }}
+      TF_VAR_newrelic_account_id: ${{ vars.NEW_RELIC_ACCOUNT_ID }}
+      TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Terraform ${{ inputs.action }}
+        run: ./scripts/tf.sh "$TARGET_ENV" "$ACTION"
