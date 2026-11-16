@@ -183,3 +183,16 @@ A `main` é protegida: alterações entram somente por pull request com o check 
 | Environments (secret, opcional) | `NEW_RELIC_LICENSE_KEY` | Licença usada pela extensão da layer New Relic |
 | Repositório (variables) | `TF_STATE_BUCKET`, `AWS_REGION` | Bucket do state e região |
 | Repositório (variables, opcionais) | `NEW_RELIC_LAYER_ARN`, `NEW_RELIC_ACCOUNT_ID` | Habilitam a instrumentação New Relic das funções |
+
+## Deploys ativos e links
+
+| Ambiente | API Gateway | Swagger | Autenticação por CPF |
+| --- | --- | --- | --- |
+| Homologação (`develop`) | https://0bagr12oql.execute-api.us-east-1.amazonaws.com | [/docs](https://0bagr12oql.execute-api.us-east-1.amazonaws.com/docs) | `POST https://0bagr12oql.execute-api.us-east-1.amazonaws.com/auth/cpf` |
+| Produção (`main`) | https://cvqm7rpmdg.execute-api.us-east-1.amazonaws.com | [/docs](https://cvqm7rpmdg.execute-api.us-east-1.amazonaws.com/docs) | `POST https://cvqm7rpmdg.execute-api.us-east-1.amazonaws.com/auth/cpf` |
+
+URLs da sessão de 16/11/2026. O ambiente roda no AWS Learner Lab e é destruído e recriado entre sessões (`scripts/bringup.sh` do [oficina-infra-k8s](https://github.com/Guribeiro/oficina-infra-k8s)), o que gera novas URLs.
+
+- Coleção Postman (autenticação por CPF, authorizer e APIs protegidas): [oficina-fase3.postman_collection.json](https://github.com/Guribeiro/tech-challenge/blob/main/docs/postman/oficina-fase3.postman_collection.json)
+- Documentação arquitetural (componentes, sequências, RFCs, ADRs, modelo de dados): [tech-challenge/docs](https://github.com/Guribeiro/tech-challenge/tree/main/docs)
+- Contrato de `POST /auth/cpf` e do authorizer: seção *Arquitetura* acima e [RFC 0003](https://github.com/Guribeiro/tech-challenge/blob/main/docs/rfcs/0003-autenticacao-lambda-jwt.md)
